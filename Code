@@ -1,0 +1,77 @@
+Query 1 - select yelping_since, count(userid) as c1 from userxyz group by yelping_since order by yelping_since;
+
+Query 2 - select r.user_id, u.name, count(r.review_id) as r1 from review r join userxyz u on r.user_id=u.userid  group by user_id,name order by r1 desc limit 100;
+
+
+Query 3 - SELECT u.name, r.review_id, r.total from review r join userxyz u
+on r.user_id=u.userid order by r.total desc limit 100;
+
+Query 4 - select city, count(open) as c1 from business where open="FALSE" group by city order by c1 desc limit 20;
+
+Query 5 - --Create views to separate the words and sentences in the review text
+create view IF NOT EXISTS br1
+AS SELECT business_id,text1
+FROM business_review
+lateral view explode(sentences(lower(text))) dummy as text1;
+
+--Create view to seperate the group of words
+create view IF NOT EXISTS br2
+AS SELECT business_id,text
+FROM br1
+lateral view explode( text1 ) dummy as text;
+
+--Compare the reviews words with dictionary words and store the polarity
+create view IF NOT EXISTS br3
+AS SELECT business_id,br2.text,
+case d.polarity
+ when 'negative' then -1
+ when 'positive' then 1
+ else 0 end as polarity
+from br2 left outer join dictionary d on br2.text = d.word;
+
+--The Optimized Row Columnar (ORC) file format provides a highly efficient way to store Hive data. It was designed to overcome limitations of the other Hive file formats. Using --ORC files improves performance when Hive is reading, writing, and processing data
+--Summation of polarity to understand the whole review
+create table IF NOT EXISTS review_sentiment
+stored as orc
+AS SELECT business_id,
+ case
+ when sum( polarity ) > 0 then 'positive'
+ when sum( polarity ) < 0 then 'negative'
+ else 'neutral' end as sentiment
+from br3 group by business_id;
+
+--Output the join table based on business id for the top 8 Food chains
+CREATE TABLE IF NOT EXISTS yelp_sentiment
+ROW FORMAT DELIMITED
+FIELDS TERMINATED BY "#"
+STORED AS TEXTFILE
+LOCATION "/user/cali/priyanka/yelp_sentiment"
+AS SELECT
+ br.business_id,br.city,br.name,br.longitude,br.state,br.latitude,
+ br.user_id,br.review_id,
+ case rs.sentiment
+ when 'positive' then 2
+ when 'neutral' then 1
+ when 'negative' then 0
+ end as sentiment
+FROM business_review br LEFT OUTER JOIN review_sentiment rs
+ on br.business_id = rs.business_id;
+
+
+Query 6 - CREATE TABLE IF NOT EXISTS business_table_new (
+business_id STRING,full_address STRING,open STRING,categories STRING,city STRING,review_cnt STRING,name STRING,longitude STRING,state STRING,
+stars STRING,latitude STRING,live_music STRING,background_music STRING,karaoke STRING,video STRING,dj STRING,jukebox STRING,park_lot STRING,
+street STRING,garage STRING,valet STRING,validated STRING,Happy_Hour STRING,Price_Range STRING,Wi_Fi STRING,Ages_Allowed STRING,Open_24_Hours STRING,vegan STRING,dairy_free STRING,halal STRING,gluten_free STRING,kosher STRING,soy_free STRING,vegetarian STRING);
+
+FROM yelp_business
+INSERT OVERWRITE TABLE business_table_new
+SELECT get_json_object(json_response, '$.business_id'),REGEXP_REPLACE(REGEXP_REPLACE(get_json_object(json_response, '$.full_address'),'\n',' '),'\t',' '),get_json_object(json_response, '$.open'),
+get_json_object(json_response, '$.categories'),get_json_object(json_response, '$.city'),get_json_object(json_response, '$.review_count'),
+REGEXP_REPLACE(get_json_object(json_response, '$.name'),'\t',' '),get_json_object(json_response, '$.longitude'),get_json_object(json_response, '$.state'),get_json_object(json_response, '$.stars'),get_json_object(json_response, '$.latitude'),get_json_object(json_response, '$.attributes.Music.live'),
+get_json_object(json_response, '$.attributes.Music.background_music'),get_json_object(json_response, '$.attributes.Music.karaoke'),
+get_json_object(json_response, '$.attributes.Music.video'),get_json_object(json_response, '$.attributes.Music.dj'),get_json_object(json_response, '$.attributes.Music.jukebox'),get_json_object(json_response, '$.attributes.Parking.lot'),get_json_object(json_response, '$.attributes.Parking.street'),
+get_json_object(json_response, '$.attributes.Parking.garage'),get_json_object(json_response, '$.attributes.Parking.valet'),get_json_object(json_response, '$.attributes.Parking.validated'),get_json_object(json_response, '$.attributes.Happy Hour'),get_json_object(json_response, '$.attributes.Price Range'),
+get_json_object(json_response, '$.attributes.Wi-Fi'),get_json_object(json_response, '$.attributes.Ages Allowed'),get_json_object(json_response, '$.attributes.Open 24 Hours'),get_json_object(json_response, '$.attributes.Dietary Restrictions.vegan'),get_json_object(json_response, '$.attributes.Dietary Restrictions.dairy-free'),
+get_json_object(json_response, '$.attributes.Dietary Restrictions.halal'),get_json_object(json_response, '$.attributes.Dietary Restrictions.gluten-free'),
+get_json_object(json_response, '$.attributes.Dietary Restrictions.kosher'),get_json_object(json_response, '$.attributes.Dietary Restrictions.soy-free'),
+get_json_object(json_response, '$.attributes.Dietary Restrictions.vegetarian');
